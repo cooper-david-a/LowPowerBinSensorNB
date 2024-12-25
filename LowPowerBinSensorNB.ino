@@ -1,10 +1,11 @@
+#define DEBUG
+
 #include <ArduinoLowPower.h>
 #include <Arduino_PMIC.h>
 #include <HX711.h>
 #include <MKRNB.h>
 #include "secrets.h"
 
-// #define DEBUG 1
 
 // Timing
 #define ONE_HOUR 3600000
@@ -13,7 +14,6 @@ int localHour = 0;
 
 // Battery
 #ifndef ADC_BATTERY
-#define ADC_BATTERY PIN_A0
 #endif
 #define R1 330000
 #define R2 1000000
@@ -34,21 +34,21 @@ float weight = -1000;
 float distance = 0.0;
 
 // NB (Narrowband) Connection
+// const NBRootCert CERT = {
+//   "CompostOnly_Root_CA",
+//   root_der,
+//   root_der_len
+// };
 NBClient client;
 NB nbAccess;
 GPRS gprs;
+bool nbConnected = false;
+bool gprsConnected = false;
 
 // Server details
-#ifndef DEBUG
-#define PORT 443
-#define HOST "api.compostonly.com"
-char server[] = "api.compostonly.com";
-#else
-// debug
-#define PORT 8000
-#define HOST "192.168.254.95"
-IPAddress server(192, 168, 254, 95);
-#endif
+#define PORT 80
+#define HOST "insecure.compostonly.com:80"
+char server[] = "insecure.compostonly.com";
 
 void setup()
 {
@@ -108,10 +108,16 @@ void loop()
   onExternalPower = PMIC.isPowerGood();
   sendReport();
 
+  // Shutdown NB connection
+  client.stop();
+  nbAccess.shutdown();
+
 #ifdef DEBUG
   Serial.println("report sent?");
   Serial.print("Local Hour: ");
   Serial.println(localHour);
+  Serial.print("Local Time: ");
+  Serial.println(nbAccess.getLocalTime());
   Serial.print("external power:");
   Serial.println(onExternalPower);
 #endif
@@ -225,10 +231,12 @@ void getDistance()
 }
 
 void sendReport()
+
 {
   int connectionTries = 0;
   int maxConnectionTries = 3;
   bool connectionDone = false;
+  char body[250];
   localHour = -1;
   dateHeader = "";
 
@@ -237,40 +245,48 @@ void sendReport()
 #endif
 
   do
-  {
-    connectionDone = nbAccess.begin(SECRET_PINNUMBER, SECRET_APN) == NB_READY;
+  {      
+#ifdef DEBUG
+    Serial.print("connectionTries: ");
+    Serial.println(connectionTries);
+#endif
+    nbConnected = nbAccess.begin(SECRET_PINNUMBER, SECRET_APN) == NB_READY;
     connectionTries++;
+    connectionDone = connectionTries >= maxConnectionTries || nbConnected;    
     if (!connectionDone)
     {
       delay(10000);
     }
-    connectionDone = connectionTries >= maxConnectionTries || connectionDone;
   } while (!connectionDone);
 
 #ifdef DEBUG
   Serial.print("NB Connected: ");
-  Serial.println(connectionDone);
+  Serial.println(nbConnected);
 #endif
 
-  if (connectionDone)
+  if (nbConnected)
   {
     // Connect to GPRS
     connectionTries = 0;
     connectionDone = false;
     do
     {
-      connectionDone = gprs.attachGPRS() == GPRS_READY;
+      gprsConnected = gprs.attachGPRS() == GPRS_READY;
       connectionTries++;
+      connectionDone = connectionTries >= maxConnectionTries || gprsConnected;
+      #ifdef DEBUG
+        Serial.print("connectionTries: ");
+        Serial.println(connectionTries);
+      #endif
       if (!connectionDone)
       {
         delay(5000);
       }
-      connectionDone = connectionTries >= maxConnectionTries || connectionDone;
     } while (!connectionDone);
 
 #ifdef DEBUG
     Serial.print("GPRS Connected: ");
-    Serial.println(connectionDone);
+    Serial.println(gprsConnected);
 #endif
   }
 
@@ -296,10 +312,13 @@ void sendReport()
 
   if (client.connected())
   {
-    char body[250];
     int n;
     n = sprintf(body, "{\n \"ssid\": \"%s\", \"batteryVoltage\": %.2f, \"weight\": %.0f, \"distance\": %.0f, \"onExternalPower\": %d \n}", SECRET_APN, batteryVoltage, weight, distance, onExternalPower);
-    client.println("POST /bin-sensor/report/ HTTP/1.1");
+    #ifdef DEBUG
+      Serial.print("Body: ");
+      Serial.println(body);
+    #endif
+    client.println("POST / HTTP/1.1");
     client.print("Host: ");
     client.println(HOST);
     client.println("Content-Type: application/json");
@@ -312,10 +331,17 @@ void sendReport()
     while (client.available())
     {
       String line = client.readStringUntil('\n');
+      
+#ifdef DEBUG
+      Serial.println(line);
+#endif
+
       if (line.startsWith("Date: "))
       {
         dateHeader = line.substring(6);
-        break;
+#ifndef DEBUG
+        break;      
+#endif
       }
       if (line == "\r")
       {
@@ -333,8 +359,4 @@ void sendReport()
       }
     }
   }
-  
-  // Shutdown NB connection
-  client.stop();
-  nbAccess.shutdown();
 } 
