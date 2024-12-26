@@ -1,4 +1,4 @@
-#define DEBUG
+#define DEBUG 0
 
 #include <ArduinoLowPower.h>
 #include <Arduino_PMIC.h>
@@ -39,8 +39,9 @@ float distance = 0.0;
 //   root_der,
 //   root_der_len
 // };
+NBModem modem;
+NB nbAccess(DEBUG);
 NBClient client;
-NB nbAccess;
 GPRS gprs;
 bool nbConnected = false;
 bool gprsConnected = false;
@@ -52,7 +53,7 @@ char server[] = "insecure.compostonly.com";
 
 void setup()
 {
-#ifdef DEBUG
+#if DEBUG
   Serial.begin(9600);
   while (!Serial)
   {
@@ -88,19 +89,19 @@ void setup()
 void loop()
 {
   getBatteryStatus();
-#ifdef DEBUG
+#if DEBUG
   Serial.print("Battery Voltage: ");
   Serial.println(batteryVoltage);
 #endif
 
   getWeight();
-#ifdef DEBUG
+#if DEBUG
   Serial.print("Weight: ");
   Serial.println(weight);
 #endif
 
   getDistance();
-#ifdef DEBUG
+#if DEBUG
   Serial.print("Distance: ");
   Serial.println(distance);
 #endif
@@ -112,7 +113,7 @@ void loop()
   client.stop();
   nbAccess.shutdown();
 
-#ifdef DEBUG
+#if DEBUG
   Serial.println("report sent?");
   Serial.print("Local Hour: ");
   Serial.println(localHour);
@@ -129,7 +130,7 @@ void loop()
 
   if (onExternalPower)
   {
-#ifdef DEBUG
+#if DEBUG
     delay(60000);
 #else
     delay(2 * ONE_HOUR);
@@ -139,11 +140,11 @@ void loop()
   {
     if (localHour > 15)
     {
-      LowPower.deepSleep(12 * ONE_HOUR);
+      LowPower.deepSleep(ONE_HOUR/2);
     }
     else
     {
-      LowPower.deepSleep(6 * ONE_HOUR);
+      LowPower.deepSleep(ONE_HOUR/2);
     }
   }
 }
@@ -240,13 +241,13 @@ void sendReport()
   localHour = -1;
   dateHeader = "";
 
-#ifdef DEBUG
+#if DEBUG
   Serial.println("Connecting to NB network");
 #endif
 
   do
   {      
-#ifdef DEBUG
+#if DEBUG
     Serial.print("connectionTries: ");
     Serial.println(connectionTries);
 #endif
@@ -255,11 +256,12 @@ void sendReport()
     connectionDone = connectionTries >= maxConnectionTries || nbConnected;    
     if (!connectionDone)
     {
+      MODEM.reset();
       delay(10000);
     }
   } while (!connectionDone);
 
-#ifdef DEBUG
+#if DEBUG
   Serial.print("NB Connected: ");
   Serial.println(nbConnected);
 #endif
@@ -274,7 +276,7 @@ void sendReport()
       gprsConnected = gprs.attachGPRS() == GPRS_READY;
       connectionTries++;
       connectionDone = connectionTries >= maxConnectionTries || gprsConnected;
-      #ifdef DEBUG
+      #if DEBUG
         Serial.print("connectionTries: ");
         Serial.println(connectionTries);
       #endif
@@ -284,14 +286,14 @@ void sendReport()
       }
     } while (!connectionDone);
 
-#ifdef DEBUG
+#if DEBUG
     Serial.print("GPRS Connected: ");
     Serial.println(gprsConnected);
 #endif
   }
 
   connectionTries = 0;
-#ifdef DEBUG
+#if DEBUG
   Serial.println("Client Connecting");
 #endif
 
@@ -305,7 +307,7 @@ void sendReport()
     delay(5000);
   }
 
-#ifdef DEBUG
+#if DEBUG
   Serial.print("client Connected: ");
   Serial.println(client.connected());
 #endif
@@ -313,8 +315,8 @@ void sendReport()
   if (client.connected())
   {
     int n;
-    n = sprintf(body, "{\n \"ssid\": \"%s\", \"batteryVoltage\": %.2f, \"weight\": %.0f, \"distance\": %.0f, \"onExternalPower\": %d \n}", SECRET_APN, batteryVoltage, weight, distance, onExternalPower);
-    #ifdef DEBUG
+    n = sprintf(body, "{\"ssid\": \"%s\", \"batteryVoltage\": %.2f, \"weight\": %.0f, \"distance\": %.0f, \"onExternalPower\": %d}", SECRET_APN, batteryVoltage, weight, distance, onExternalPower);
+    #if DEBUG
       Serial.print("Body: ");
       Serial.println(body);
     #endif
@@ -332,16 +334,18 @@ void sendReport()
     {
       String line = client.readStringUntil('\n');
       
-#ifdef DEBUG
+#if DEBUG
       Serial.println(line);
 #endif
 
       if (line.startsWith("Date: "))
       {
         dateHeader = line.substring(6);
-#ifndef DEBUG
+        
+#if !DEBUG
         break;      
 #endif
+
       }
       if (line == "\r")
       {
