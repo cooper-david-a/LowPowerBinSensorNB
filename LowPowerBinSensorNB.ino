@@ -39,7 +39,7 @@ float distance = 0.0;
 //   root_der,
 //   root_der_len
 // };
-NBModem modem;
+
 NB nbAccess(DEBUG);
 NBClient client;
 GPRS gprs;
@@ -94,7 +94,7 @@ void loop()
   Serial.println(batteryVoltage);
 #endif
 
-  getWeight();
+  //getWeight();
 #if DEBUG
   Serial.print("Weight: ");
   Serial.println(weight);
@@ -133,18 +133,18 @@ void loop()
 #if DEBUG
     delay(60000);
 #else
-    delay(2 * ONE_HOUR);
+    delay(2*ONE_HOUR);
 #endif
   }
   else
   {
     if (localHour > 15)
     {
-      LowPower.deepSleep(ONE_HOUR/2);
+      LowPower.deepSleep(12*ONE_HOUR);
     }
     else
     {
-      LowPower.deepSleep(ONE_HOUR/2);
+      LowPower.deepSleep(6*ONE_HOUR);
     }
   }
 }
@@ -174,7 +174,7 @@ void getWeight()
   bool done = false;
   weight = -1000.0;
   int tries = 0;
-  int maxTries = 10;
+  int maxTries = 3;
   do
   {
     if (scale.is_ready())
