@@ -1,4 +1,4 @@
-#define DEBUG 0
+#define DEBUG 1
 
 #include <ArduinoLowPower.h>
 #include <Arduino_PMIC.h>
@@ -23,6 +23,8 @@ int localHour = 0;
 int maxSourceVoltage = 3.3 * (R1 + R2) / R2;
 float batteryVoltage;
 bool onExternalPower;
+bool chargeDone;
+bool chargeNeeded;
 
 // Weight
 #define DATA_PIN 7
@@ -32,13 +34,6 @@ float weight = -1000;
 
 // Distance
 float distance = 0.0;
-
-// NB (Narrowband) Connection
-// const NBRootCert CERT = {
-//   "CompostOnly_Root_CA",
-//   root_der,
-//   root_der_len
-// };
 
 NB nbAccess(DEBUG);
 NBClient client;
@@ -66,19 +61,11 @@ void setup()
   analogReadResolution(12);
   PMIC.begin();
   PMIC.enableBATFET();
-  PMIC.enableBoostMode();
   PMIC.setMinimumSystemVoltage(BATTERY_EMPTY_VOLTAGE);
   PMIC.setChargeVoltage(BATTERY_FULL_VOLTAGE);
   PMIC.setChargeCurrent(0.2 * BATTERY_CAPACITY);
   PMIC.setFastChargeTimerSetting(12);
-  PMIC.enableCharge();
 
-  // Distance measurement setup
-  Serial1.begin(9600);
-  while (!Serial1)
-  {
-    ;
-  }
 
   // Weight measurement setup
   scale.begin(DATA_PIN, CLOCK_PIN);
@@ -94,7 +81,7 @@ void loop()
   Serial.println(batteryVoltage);
 #endif
 
-  //getWeight();
+  getWeight();
 #if DEBUG
   Serial.print("Weight: ");
   Serial.println(weight);
@@ -107,6 +94,39 @@ void loop()
 #endif
 
   onExternalPower = PMIC.isPowerGood();
+
+  if(onExternalPower){
+    int startChargingTime = millis();
+    chargeNeeded = batteryVoltage < 3.7 && batteryVoltage > 3;
+#if DEBUG
+    Serial.print("Charge Needed: ");
+    Serial.println(chargeNeeded);
+#endif
+    if (chargeNeeded)
+    {
+    PMIC.enableCharge();
+    
+    while (millis() - startChargingTime < 12*ONE_HOUR)
+    {
+      onExternalPower = PMIC.isPowerGood();
+      chargeDone = PMIC.chargeStatus() == CHARGE_TERMINATION_DONE;      
+      if(!onExternalPower || chargeDone){
+        break;        
+      }
+      delay(10000);
+      
+#if DEBUG
+      getBatteryStatus();
+      Serial.print("Battery Voltage: ");
+      Serial.println(batteryVoltage);
+#endif
+
+    }
+      PMIC.disableCharge();
+    }
+      
+  }
+  
   sendReport();
 
   // Shutdown NB connection
@@ -118,7 +138,7 @@ void loop()
   Serial.print("Local Hour: ");
   Serial.println(localHour);
   Serial.print("Local Time: ");
-  Serial.println(nbAccess.getLocalTime());
+  Serial.println(nbAccess.getTime());
   Serial.print("external power:");
   Serial.println(onExternalPower);
 #endif
@@ -128,15 +148,9 @@ void loop()
     PMIC.disableBATFET();
   }
 
-  if (onExternalPower)
-  {
-#if DEBUG
+  if (onExternalPower){
     delay(60000);
-#else
-    delay(2*ONE_HOUR);
-#endif
-  }
-  else
+  }else
   {
     if (localHour > 15)
     {
@@ -148,7 +162,6 @@ void loop()
     }
   }
 }
-
 void getBatteryStatus()
 {
   bool done = false;
@@ -175,6 +188,7 @@ void getWeight()
   weight = -1000.0;
   int tries = 0;
   int maxTries = 3;
+  scale.power_up();
   do
   {
     if (scale.is_ready())
@@ -188,10 +202,13 @@ void getWeight()
       delay(1000);
     };
   } while (!done);
+  scale.power_down();
 }
 
 void getDistance()
 {
+  Serial1.begin(9600);
+  delay(5000);
   bool done = false;
   unsigned char distanceData[4] = {};
   distance = 0;
@@ -229,6 +246,7 @@ void getDistance()
       delay(1000);
     }
   } while (!done);
+  Serial1.end();
 }
 
 void sendReport()
@@ -256,7 +274,6 @@ void sendReport()
     connectionDone = connectionTries >= maxConnectionTries || nbConnected;    
     if (!connectionDone)
     {
-      MODEM.reset();
       delay(10000);
     }
   } while (!connectionDone);
