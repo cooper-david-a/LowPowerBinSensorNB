@@ -1,4 +1,4 @@
-#define DEBUG 1
+#define DEBUG 0
 
 #include <ArduinoLowPower.h>
 #include <Arduino_PMIC.h>
@@ -158,7 +158,7 @@ void loop()
     }
     else
     {
-      LowPower.deepSleep(6*ONE_HOUR);
+      LowPower.deepSleep(ONE_HOUR/2);
     }
   }
 }
@@ -342,7 +342,7 @@ void sendReport()
     client.println(HOST);
     client.println("Content-Type: application/json");
     client.println("Content-Length: " + String(n));
-    client.println("Connection: close");
+    //client.println("Connection: close");
     client.println();
     client.println(body);
     delay(1000);
