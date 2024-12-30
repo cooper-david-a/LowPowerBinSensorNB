@@ -35,6 +35,7 @@ float distance = 0.0;
 NBClient client;
 NB nbAccess(DEBUG);
 GPRS gprs;
+bool shutdownSuccessfull;
 bool nbConnected = false;
 bool gprsConnected = false;
 
@@ -119,7 +120,7 @@ void loop()
 #if DEBUG
     delay(60000);
 #else
-    delay(2 * ONE_HOUR);
+    delay(ONE_HOUR/2);
 #endif
   }
   else
@@ -298,7 +299,7 @@ void sendReport()
       Serial.println(body);
 #endif
 
-    client.println("POST /bin-sensor/report/ HTTP/1.1");
+    client.println("POST / HTTP/1.1");
     client.print("Host: ");
     client.println(HOST);
     client.println("Content-Type: application/json");
@@ -306,7 +307,7 @@ void sendReport()
     //client.println("Connection: close");
     client.println();
     client.println(body);
-    delay(500);
+    delay(1000);
 
     while (client.available())
     {
@@ -343,6 +344,11 @@ void sendReport()
   }
   
   // Shutdown NB connection
-  client.stop();
-  nbAccess.shutdown();
+  //client.stop();
+  //delay(500);
+  shutdownSuccessfull = nbAccess.shutdown();
+#if DEBUG
+  Serial.print("Shutdown successfull: ");
+  Serial.println(shutdownSuccessfull);
+#endif
 } 
