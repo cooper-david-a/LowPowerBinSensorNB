@@ -13,8 +13,6 @@ String dateHeader = "";
 int localHour = 0;
 
 // Battery
-#ifndef ADC_BATTERY
-#endif
 #define R1 330000
 #define R2 1000000
 #define BATTERY_FULL_VOLTAGE 4.2
@@ -23,8 +21,6 @@ int localHour = 0;
 int maxSourceVoltage = 3.3 * (R1 + R2) / R2;
 float batteryVoltage;
 bool onExternalPower;
-bool chargeDone;
-bool chargeNeeded;
 
 // Weight
 #define DATA_PIN 7
@@ -35,8 +31,9 @@ float weight = -1000;
 // Distance
 float distance = 0.0;
 
-NB nbAccess(DEBUG);
+// NB (Narrowband) Connection
 NBClient client;
+NB nbAccess(DEBUG);
 GPRS gprs;
 bool nbConnected = false;
 bool gprsConnected = false;
@@ -61,11 +58,19 @@ void setup()
   analogReadResolution(12);
   PMIC.begin();
   PMIC.enableBATFET();
+  PMIC.enableBoostMode();
   PMIC.setMinimumSystemVoltage(BATTERY_EMPTY_VOLTAGE);
   PMIC.setChargeVoltage(BATTERY_FULL_VOLTAGE);
   PMIC.setChargeCurrent(0.2 * BATTERY_CAPACITY);
   PMIC.setFastChargeTimerSetting(12);
+  PMIC.enableCharge();
 
+  // Distance measurement setup
+  Serial1.begin(9600);
+  while (!Serial1)
+  {
+    ;
+  }
 
   // Weight measurement setup
   scale.begin(DATA_PIN, CLOCK_PIN);
@@ -94,51 +99,12 @@ void loop()
 #endif
 
   onExternalPower = PMIC.isPowerGood();
-
-  if(onExternalPower){
-    int startChargingTime = millis();
-    chargeNeeded = batteryVoltage < 3.7 && batteryVoltage > 3;
-#if DEBUG
-    Serial.print("Charge Needed: ");
-    Serial.println(chargeNeeded);
-#endif
-    if (chargeNeeded)
-    {
-    PMIC.enableCharge();
-    
-    while (millis() - startChargingTime < 12*ONE_HOUR)
-    {
-      onExternalPower = PMIC.isPowerGood();
-      chargeDone = PMIC.chargeStatus() == CHARGE_TERMINATION_DONE;      
-      if(!onExternalPower || chargeDone){
-        break;        
-      }
-      delay(10000);
-      
-#if DEBUG
-      getBatteryStatus();
-      Serial.print("Battery Voltage: ");
-      Serial.println(batteryVoltage);
-#endif
-
-    }
-      PMIC.disableCharge();
-    }
-      
-  }
-  
   sendReport();
-
-  // Shutdown NB connection
-  client.stop();
-  nbAccess.shutdown();
 
 #if DEBUG
   Serial.println("report sent?");
   Serial.print("Local Hour: ");
   Serial.println(localHour);
-  Serial.print("Local Time: ");
-  Serial.println(nbAccess.getTime());
   Serial.print("external power:");
   Serial.println(onExternalPower);
 #endif
@@ -148,20 +114,27 @@ void loop()
     PMIC.disableBATFET();
   }
 
-  if (onExternalPower){
+  if (onExternalPower)
+  {
+#if DEBUG
     delay(60000);
-  }else
+#else
+    delay(2 * ONE_HOUR);
+#endif
+  }
+  else
   {
     if (localHour > 15)
     {
-      LowPower.deepSleep(12*ONE_HOUR);
+      LowPower.deepSleep(12 * ONE_HOUR);
     }
     else
     {
-      LowPower.deepSleep(ONE_HOUR/2);
+      LowPower.deepSleep(6 * ONE_HOUR);
     }
   }
 }
+
 void getBatteryStatus()
 {
   bool done = false;
@@ -187,8 +160,7 @@ void getWeight()
   bool done = false;
   weight = -1000.0;
   int tries = 0;
-  int maxTries = 3;
-  scale.power_up();
+  int maxTries = 10;
   do
   {
     if (scale.is_ready())
@@ -202,13 +174,10 @@ void getWeight()
       delay(1000);
     };
   } while (!done);
-  scale.power_down();
 }
 
 void getDistance()
 {
-  Serial1.begin(9600);
-  delay(5000);
   bool done = false;
   unsigned char distanceData[4] = {};
   distance = 0;
@@ -246,16 +215,13 @@ void getDistance()
       delay(1000);
     }
   } while (!done);
-  Serial1.end();
 }
 
 void sendReport()
-
 {
   int connectionTries = 0;
   int maxConnectionTries = 3;
   bool connectionDone = false;
-  char body[250];
   localHour = -1;
   dateHeader = "";
 
@@ -264,18 +230,14 @@ void sendReport()
 #endif
 
   do
-  {      
-#if DEBUG
-    Serial.print("connectionTries: ");
-    Serial.println(connectionTries);
-#endif
+  {
     nbConnected = nbAccess.begin(SECRET_PINNUMBER, SECRET_APN) == NB_READY;
     connectionTries++;
-    connectionDone = connectionTries >= maxConnectionTries || nbConnected;    
-    if (!connectionDone)
+    if (!nbConnected)
     {
-      delay(10000);
+      delay(5000);
     }
+    connectionDone = connectionTries >= maxConnectionTries || nbConnected;
   } while (!connectionDone);
 
 #if DEBUG
@@ -292,20 +254,16 @@ void sendReport()
     {
       gprsConnected = gprs.attachGPRS() == GPRS_READY;
       connectionTries++;
-      connectionDone = connectionTries >= maxConnectionTries || gprsConnected;
-      #if DEBUG
-        Serial.print("connectionTries: ");
-        Serial.println(connectionTries);
-      #endif
-      if (!connectionDone)
+      if (!gprsConnected)
       {
         delay(5000);
       }
+      connectionDone = connectionTries >= maxConnectionTries || gprsConnected;
     } while (!connectionDone);
 
 #if DEBUG
     Serial.print("GPRS Connected: ");
-    Serial.println(gprsConnected);
+    Serial.println(connectionDone);
 #endif
   }
 
@@ -331,13 +289,16 @@ void sendReport()
 
   if (client.connected())
   {
+    char body[250];
     int n;
-    n = sprintf(body, "{\"ssid\": \"%s\", \"batteryVoltage\": %.2f, \"weight\": %.0f, \"distance\": %.0f, \"onExternalPower\": %d}", SECRET_APN, batteryVoltage, weight, distance, onExternalPower);
-    #if DEBUG
+    n = sprintf(body, "{\"ssid\": \"%s\", \"batteryVoltage\": %.2f, \"weight\": %.1f, \"distance\": %.0f, \"onExternalPower\": %d}", SECRET_APN, batteryVoltage, weight, distance, onExternalPower);
+
+#if DEBUG
       Serial.print("Body: ");
       Serial.println(body);
-    #endif
-    client.println("POST / HTTP/1.1");
+#endif
+
+    client.println("POST /bin-sensor/report/ HTTP/1.1");
     client.print("Host: ");
     client.println(HOST);
     client.println("Content-Type: application/json");
@@ -345,12 +306,12 @@ void sendReport()
     //client.println("Connection: close");
     client.println();
     client.println(body);
-    delay(1000);
+    delay(500);
 
     while (client.available())
     {
       String line = client.readStringUntil('\n');
-      
+
 #if DEBUG
       Serial.println(line);
 #endif
@@ -358,7 +319,7 @@ void sendReport()
       if (line.startsWith("Date: "))
       {
         dateHeader = line.substring(6);
-        
+
 #if !DEBUG
         break;      
 #endif
@@ -380,4 +341,8 @@ void sendReport()
       }
     }
   }
+  
+  // Shutdown NB connection
+  client.stop();
+  nbAccess.shutdown();
 } 
